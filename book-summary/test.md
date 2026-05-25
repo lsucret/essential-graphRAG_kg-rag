@@ -30,36 +30,7 @@
 
 호출자는 timeout만 보게 되고, 메일이 갔는지 안 갔는지 판단할 수 없습니다.
 
-```plantuml
-@startuml
-title Mail send request: failure is ambiguous
-skinparam shadowing false
-skinparam monochrome true
-
-actor "Application A" as A
-participant "Mail Service" as M
-
-group Case 1: target service fails
-  A -> M: sendEmail(request)
-  M --> A: error or timeout
-  note right of A
-    Caller observes failure.
-    It may still not know enough
-    for every failure mode.
-  end note
-end
-
-group Case 2: response is lost
-  A -> M: sendEmail(request)
-  M -> M: send mail
-  M -[#red]x A: success response lost
-  note right of A
-    Timeout means:
-    result is unknown.
-  end note
-end
-@enduml
-```
+![img.png](img.png)
 
 **부족한 설계**
 
@@ -87,29 +58,8 @@ retry는 일시적인 네트워크 장애를 복구하는 좋은 방법입니다
 
 이때 시스템은 at-least-once 동작을 하게 됩니다. 적어도 한 번은 처리되지만, 한 번만 처리된다는 보장은 없습니다.
 
-```plantuml
-@startuml
-title Retry can duplicate a side effect
-skinparam shadowing false
-skinparam monochrome true
-
-actor "Application A" as A
-participant "Mail Service" as M
-collections "Mailbox" as B
-
-A -> M: 1. sendEmail(id=1234)
-M -> B: 2. deliver Mail-1
-M -[#red]x A: 3. success response lost
-A -> M: 4. retry sendEmail(id=1234)
-M -> B: 5. deliver Mail-1 again
-M --> A: 6. success
-
-note right of B
-  Same business action
-  was executed twice.
-end note
-@enduml
-```
+![img_1.png](img_1.png)
+![img_2.png](img_2.png)
 
 **부족한 설계**
 
@@ -137,39 +87,7 @@ retry를 포기하면 장애 때마다 수동 복구가 필요합니다. retry�
 
 소비자는 이 이벤트를 누적해서 자기 read model을 만듭니다. 그런데 첫 번째 이벤트가 retry 때문에 한 번 더 전달되면 소비자는 수량을 3으로 계산할 수 있습니다.
 
-```plantuml
-@startuml
-title Cart events as deltas: duplicates corrupt the read model
-skinparam shadowing false
-skinparam monochrome true
-
-actor User
-participant "Cart Service" as Cart
-queue "Book Events" as Q
-participant "Book Events Consumer" as C
-database "Consumer Cart View" as View
-
-User -> Cart: add book A
-Cart -> Q: event_1: BookAdded(A, +1)
-Q -> C: event_1
-C -> View: quantity(A) = 1
-
-User -> Cart: add book A again
-Cart -> Q: event_2: BookAdded(A, +1)
-Q -> C: event_2
-C -> View: quantity(A) = 2
-
-... retry or duplicate delivery ...
-Q -> C: event_1 again
-C -> View: quantity(A) = 3
-
-note right of View
-  The real cart has 2 items,
-  but the read model has 3.
-end note
-@enduml
-```
-
+ ![img_4.png](img_4.png)
 **부족한 설계**
 
 이벤트를 “변경분”으로만 보냅니다. 이 설계는 이벤트가 정확히 한 번만 전달된다는 가정에 의존합니다.
@@ -255,32 +173,7 @@ full-state 이벤트는 payload가 커지고, 파티션별 순서 보장은 처�
 
 장점은 확장성과 독립성입니다. 단점은 같은 이벤트 흐름의 중복과 순서 문제가 여러 저장소로 퍼진다는 점입니다.
 
-```plantuml
-@startuml
-title CQRS: one write stream, multiple read models
-skinparam shadowing false
-skinparam monochrome true
-
-participant "Cart Service\n(Command / Write)" as Cart
-queue "Users Queue" as Q
-participant "User Profile Service\n(Query)" as Profile
-database "DB partitioned by user_id" as ProfileDB
-participant "Relation Analysis Service\n(Query)" as Analysis
-database "Graph / Analysis Store" as GraphDB
-
-Cart -> Q: append user cart event
-Q -> Profile: consume event
-Profile -> ProfileDB: build lookup model by user_id
-Q -> Analysis: consume event
-Analysis -> GraphDB: build analysis model
-
-note bottom
-  More read models means more duplicated data
-  and more places where duplicate/out-of-order
-  delivery can create divergence.
-end note
-@enduml
-```
+![img_5.png](img_5.png)
 
 **개선된 점**
 
@@ -308,29 +201,7 @@ end note
 
 Application A가 최초 요청에 UUID를 붙이고, retry할 때도 같은 UUID를 보냅니다. Mail Service는 이 ID를 영속 저장소에 기록해 이미 처리한 요청인지 판단합니다.
 
-```plantuml
-@startuml
-title Deduplication with a stable request id
-skinparam shadowing false
-skinparam monochrome true
-
-actor "Application A" as A
-participant "Mail Service" as M
-database "Deduplication Table" as D
-collections "Mailbox" as B
-
-A -> M: 1. sendEmail(id=1234)
-M -> D: 2. check and save id=1234
-D --> M: not duplicate
-M -> B: 3. send Mail-1
-M -[#red]x A: 4. response lost
-
-A -> M: 5. retry sendEmail(id=1234)
-M -> D: 6. check id=1234
-D --> M: duplicate
-M --> A: 7. ignore duplicate
-@enduml
-```
+![img_6.png](img_6.png)
 
 **개선된 점**
 
@@ -358,34 +229,7 @@ ID를 언제 저장하느냐가 어렵습니다. 처리 전에 저장하면 누�
 
 retry는 이미 처리된 요청으로 보이기 때문에 무시되고, 메일은 끝내 발송되지 않습니다.
 
-```plantuml
-@startuml
-title Save-before-send can lose the business action
-skinparam shadowing false
-skinparam monochrome true
-
-actor "Application A" as A
-participant "Mail Service" as M
-database "Deduplication Table" as D
-collections "Mailbox" as B
-
-A -> M: sendEmail(id=1234)
-M -> D: save id=1234
-D --> M: saved
-M -[#red]x B: send mail fails
-M --> A: failure
-
-A -> M: retry sendEmail(id=1234)
-M -> D: check id=1234
-D --> M: duplicate
-M --> A: ignore duplicate
-
-note right of B
-  The duplicate was prevented,
-  but the mail was never sent.
-end note
-@enduml
-```
+![img_7.png](img_7.png)
 
 **개선된 점**
 
@@ -413,55 +257,8 @@ end note
 
 하지만 find와 save 사이에 메일 발송이라는 긴 외부 호출이 들어갑니다. 이 사이에 retry가 끼어들면 두 요청 모두 중복이 아니라고 판단할 수 있습니다.
 
-```plantuml
-@startuml
-title Naive deduplication split into three stages
-skinparam shadowing false
-skinparam monochrome true
+![img_8.png](img_8.png)
 
-start
-:find id in database;
-if (id present?) then (yes)
-  :ignore as duplicate;
-  stop
-else (no)
-  :execute business action\n(send mail);
-  :save id in database;
-  stop
-endif
-@enduml
-```
-
-```plantuml
-@startuml
-title One-node context: long send action creates a race window
-skinparam shadowing false
-skinparam monochrome true
-
-actor "Application A" as A
-participant "Mail Service" as M
-database "Deduplication Table" as D
-collections "Mailbox" as B
-
-A -> M: T1 sendEmail(id=1234)
-M -> D: find(id=1234)
-D --> M: not present
-M -> B: send mail\n(blocks 20s)
-A <-- M: timeout after 10s
-
-A -> M: T2 retry sendEmail(id=1234)
-M -> D: find(id=1234)
-D --> M: not present
-M -> B: send mail again
-M -> D: save(id=1234)
-
-M -> D: T1 finally saves(id=1234)
-note right of B
-  Both calls observed
-  "not present".
-end note
-@enduml
-```
 
 **개선된 점**
 
@@ -489,57 +286,7 @@ find, action, save가 서로 다른 단계입니다. 외부 호출이 길어질�
 
 둘 다 같은 dedup table을 보더라도, 둘이 확인하는 시점에 아직 ID가 저장되어 있지 않으면 둘 다 메일을 보냅니다.
 
-```plantuml
-@startuml
-title Mail service deployed to multiple nodes
-skinparam shadowing false
-skinparam monochrome true
-
-actor "Application A" as A
-node "Load Balancer" as LB
-node "Mail Service #1" as M1
-node "Mail Service #2" as M2
-node "Mail Service #N" as MN
-database "Processed Request IDs" as D
-
-A -> LB: sendEmail(id)
-LB -> M1: route request
-M1 -> D: check / save request id
-
-LB -[hidden]-> M2
-LB -[hidden]-> MN
-@enduml
-```
-
-```plantuml
-@startuml
-title Multi-node retry: two instances both miss the duplicate
-skinparam shadowing false
-skinparam monochrome true
-
-actor "Application A" as A
-participant "Load Balancer" as LB
-participant "Mail Service #1" as M1
-participant "Mail Service #2" as M2
-database "Processed Request IDs" as D
-collections "Mailbox" as B
-
-A -> LB: 1. sendEmail(id=1234)
-LB -> M1: 2. route to instance #1
-M1 -> D: 3. find(id=1234)
-D --> M1: not present
-M1 -> B: send mail\n(slow)
-M1 -[#red]x A: 4. timeout
-
-A -> LB: 5. retry sendEmail(id=1234)
-LB -> M2: 6. route to instance #2
-M2 -> D: 7. find(id=1234)
-D --> M2: not present
-M2 -> B: send mail again
-M1 -> D: 8. save(id=1234)
-M2 -> D: 9. save(id=1234)
-@enduml
-```
+![img_9.png](img_9.png)
 
 **개선된 점**
 
@@ -567,50 +314,7 @@ M2 -> D: 9. save(id=1234)
 
 `insert-if-absent-and-return` 같은 연산을 사용하면, 두 요청이 동시에 와도 하나만 insert에 성공하고 다른 하나는 이미 존재한다고 판단합니다.
 
-```plantuml
-@startuml
-title Split find and save creates interleaving
-skinparam shadowing false
-skinparam monochrome true
-
-participant "Thread / Node 1" as T1
-participant "Database" as D
-participant "Thread / Node 2" as T2
-
-T1 -> D: find(id=1234)
-D --> T1: false
-T2 -> D: find(id=1234)
-D --> T2: false
-T1 -> D: save(id=1234)
-T2 -> D: save(id=1234)
-
-note bottom
-  Both threads passed the duplicate check.
-end note
-@enduml
-```
-
-```plantuml
-@startuml
-title Atomic upsert removes the race window
-skinparam shadowing false
-skinparam monochrome true
-
-participant "Thread / Node 1" as T1
-participant "Database" as D
-participant "Thread / Node 2" as T2
-
-T1 -> D: insertIfAbsent(id=1234)
-D --> T1: inserted=true
-T2 -> D: insertIfAbsent(id=1234)
-D --> T2: inserted=false
-
-note bottom
-  The check and insert happen
-  as one database-side operation.
-end note
-@enduml
-```
+![img_10.png](img_10.png)
 
 **개선된 점**
 
