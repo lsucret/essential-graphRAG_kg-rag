@@ -155,13 +155,13 @@ full-state 이벤트는 payload가 커지고, 파티션별 순서 보장은 처�
 
 **부족한 점**
 
-데이터가 N곳에 복제되므로, 하나의 중복 이벤트나 순서 역전이 여러 read model의 divergence로 이어질 수 있습니다.
+데이터가 N곳에 복제되므로, 하나의 중복 이벤트나 순서 역전이 여러 read model의 상태 불일치로 이어질 수 있습니다.
 
 **다음 개선**
 
 소비자 쪽 deduplication, 파티션별 ordering, version 기반 stale event 차단을 read model 설계의 일부로 포함합니다.
 
-**한 줄 요약:** CQRS는 확장성을 얻는 대신 중복, 순서, 데이터 divergence를 명시적으로 설계해야 합니다.
+**한 줄 요약:** CQRS는 확장성을 얻는 대신 중복, 순서, 데이터 불일치에 대해 명시적으로 설계해야 합니다.
 
 ---
 
@@ -232,6 +232,18 @@ retry는 이미 처리된 요청으로 보이기 때문에 무시되고, 메일�
 하지만 find와 save 사이에 메일 발송이라는 긴 외부 호출이 들어갑니다. 이 사이에 retry가 끼어들면 두 요청 모두 중복이 아니라고 판단할 수 있습니다.
 
 ![img_8.png](img_8.png)
+```java
+public class NaiveDeduplicationService {
+ private final DbClient dbClient = new DbClient();
+   public void executeIfNotDuplicate(String id, Runnable action) {
+   boolean present = dbClient.find(id); // find
+   if (!present) {
+     action.run(); // action
+     dbClient.save(id); // save
+   }
+ }
+}
+```
 
 
 **개선된 점**
@@ -289,6 +301,18 @@ find, action, save가 서로 다른 단계입니다. 외부 호출이 길어질�
 `insert-if-absent-and-return` 같은 연산을 사용하면, 두 요청이 동시에 와도 하나만 insert에 성공하고 다른 하나는 이미 존재한다고 판단합니다.
 
 ![img_10.png](img_10.png)
+
+```java
+@Override
+public boolean isDuplicate(String id) {
+ boolean wasInserted = dbClient.findAndInsertIfNeeded(id);
+ if (wasInserted) {
+   return false;
+ } else {
+   return true;
+ }
+}
+```
 
 **개선된 점**
 
