@@ -115,35 +115,6 @@ retry를 포기하면 장애 때마다 수동 복구가 필요합니다. retry�
 
 하지만 새 문제가 있습니다. 오래된 상태가 retry로 늦게 도착하면 최신 상태를 덮어쓸 수 있습니다. 그래서 full-state만으로 끝나지 않고 순서 보장이 필요합니다.
 
-```plantuml
-@startuml
-title Full-state events: idempotent for duplicates, risky when out of order
-skinparam shadowing false
-skinparam monochrome true
-
-participant "Cart Service" as Cart
-queue "Cart Events" as Q
-participant "Consumer" as C
-database "Cart View" as View
-
-Cart -> Q: T1 event_1: CartState(A=1)
-Q -[#red]x C: delivery fails
-
-Cart -> Q: T2 event_2: CartState(A=2)
-Q -> C: event_2
-C -> View: set quantity(A)=2
-
-... delayed retry ...
-Q -> C: T3 retry event_1
-C -> View: set quantity(A)=1
-
-note right of View
-  Full-state duplicate is safe,
-  but stale full-state update is not.
-end note
-@enduml
-```
-
 **개선된 점**
 
 같은 full-state 이벤트가 중복 전달되어도 같은 값으로 덮어쓰기 때문에 delta 이벤트보다 멱등적입니다.
